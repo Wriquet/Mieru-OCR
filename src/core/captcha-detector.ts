@@ -866,7 +866,13 @@ export class CaptchaDetector {
     let ancestor = parent?.parentElement;
     let depth = 0;
     while (ancestor && depth < 4) {
-      const input = this.findClosestInputInContainer(ancestor, captchaRect, 180);
+      // 祖先链本身就是天然的关联范围，这里不再对中心距设硬上限。
+      // 中心距会随输入框变宽线性变大：例如 CSN 门户（taoixmro.csair.com）的
+      // 验证码图（102×34）与 input[name=captcha]（320×40）中心距达 275px，
+      // 旧的 180 上限会把正确答案直接否掉，导致「检测到验证码但配不到输入框」，
+      // 既不识别也不填充。容器内仍会走 scoreInputCandidate 打分，
+      // 验证码关键词权重（+120/+140）足以压过账号/密码框的 -200 惩罚。
+      const input = this.findClosestInputInContainer(ancestor, captchaRect);
       if (input) return input;
       ancestor = ancestor.parentElement;
       depth++;
@@ -885,7 +891,10 @@ export class CaptchaDetector {
         (
           (inputRect.left > captchaRect.right && inputRect.left - captchaRect.right < 220 && Math.abs(inputRect.top - captchaRect.top) < 90) ||
           (inputRect.top > captchaRect.bottom && inputRect.top - captchaRect.bottom < 160 && Math.abs(inputRect.left - captchaRect.left) < 160) ||
-          (this.calculateDistance(captchaRect, inputRect) < 240)
+          (this.calculateDistance(captchaRect, inputRect) < 240) ||
+          // 补齐「输入框在验证码图片左侧 / 上方」的情形：上面两个位置条件只覆盖右侧和下方。
+          // 这里用边缘间距而非中心距 —— 宽输入框会把中心点推得很远，但实际是紧挨着的。
+          (this.calculateEdgeDistance(captchaRect, inputRect) < 120)
         );
       if (!roughlyNear) continue;
       const score = this.scoreInputCandidate(htmlInput, captchaRect, inputRect);
@@ -1134,6 +1143,17 @@ export class CaptchaDetector {
     const centerX2 = rect2.left + rect2.width / 2;
     const centerY2 = rect2.top + rect2.height / 2;
     return Math.sqrt(Math.pow(centerX2 - centerX1, 2) + Math.pow(centerY2 - centerY1, 2));
+  }
+
+  /**
+   * 两个矩形之间的边缘间距（相交时为 0）。
+   * 与 calculateDistance（中心距）不同，它只衡量「挨得近不近」，
+   * 不会因为输入框很宽、验证码图很小而虚高。
+   */
+  private calculateEdgeDistance(rect1: DOMRect, rect2: DOMRect): number {
+    const dx = Math.max(0, Math.max(rect1.left - rect2.right, rect2.left - rect1.right));
+    const dy = Math.max(0, Math.max(rect1.top - rect2.bottom, rect2.top - rect1.bottom));
+    return Math.sqrt(dx * dx + dy * dy);
   }
 
   generateSelector(element: Element): string {
